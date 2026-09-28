@@ -1,0 +1,8 @@
+node_modules/
+.next/
+.vercel/
+.env
+.env*.local
+*.log
+# 검토 화면 파일은 저장소에 두지 않는다 — 빌드 때 Supabase에서 받음(scripts/fetch_page.mjs)
+public/review.html
