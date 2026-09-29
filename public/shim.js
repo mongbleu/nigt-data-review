@@ -14,7 +14,7 @@
   const IDLE_POLL_MS = 60 * 1000;
   const REFRESH_AFTER_SET_MS = 800;
   const KEEPALIVE_MAX_BYTES = 60000; // 페이지를 닫는 중에도 저장 요청이 끝나도록 (브라우저 한도 64KB)
-  const COLLS = new Set(['reviews', 'answers', 'config']);
+  const COLLS = new Set(['reviews', 'answers', 'config', 'time']);   // time(9/30): 검토 시간 — 서버가 관리자에게만 전체, 검토자에게는 자기 문서만 줌
   const ID_RE = /^[A-Za-z0-9_\-]{1,80}$/;
 
   const enc = new TextEncoder();
@@ -194,9 +194,13 @@
     return { coll, id };
   }
 
-  async function setDoc(coll, id, body) {
+  // opts.paths(9/30): 고친 칸만 — 서버가 그 순간의 DB 문서에 합쳐 합친 문서를 돌려준다 → 이 탭의 사본도 합친 문서로
+  async function setDoc(coll, id, body, opts) {
+    const payload = { coll, id, body };
+    if (opts && Array.isArray(opts.paths)) payload.paths = opts.paths;
+    let r;
     try {
-      await call('POST', '/api/docs', { coll, id, body });
+      r = await call('POST', '/api/docs', payload);
     } catch (e) {
       // 세션 만료로 로그인 화면으로 가기 전, 검토 내용을 app.js의 임시 저장 자리에 남겨 다시 들어오면 이어서 저장되게 한다
       if (e && e.code === 'unauthenticated' && coll === 'reviews' && body && (body.kind === 'd' || body.kind === 'e')) {
@@ -205,15 +209,17 @@
       throw e;
     }
     // 서버 저장이 끝난 내용을 구독자에게 바로 반영하고, 800ms 뒤 서버에서 다시 읽는다
+    const saved = r && r.body && typeof r.body === 'object' && !Array.isArray(r.body) ? r.body : body;
     const ch = channel(coll);
     ch.localWrites.set(id, performance.now());
-    const json = canon(JSON.parse(JSON.stringify(body)));
+    const json = canon(JSON.parse(JSON.stringify(saved)));
     const cur = ch.docs.get(id);
     if (!cur || cur.json !== json) {
       ch.docs.set(id, { json, updated_at: cur ? cur.updated_at : null });
       if (ch.loaded) emit(ch, new Set([id]));
     }
     scheduleRefresh(ch);
+    return { at: (r && r.at) || null, body: JSON.parse(JSON.stringify(saved)) };
   }
 
   const db = {
@@ -225,7 +231,7 @@
       const { coll, id } = parsePath(p);
       return {
         onSnapshot: (cb, err) => subscribe(coll, { id, cb, err }),
-        set: (body) => setDoc(coll, id, body),
+        set: (body, opts) => setDoc(coll, id, body, opts),
       };
     },
   };
