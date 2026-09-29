@@ -34,14 +34,17 @@ const PATCHES = [
   // { find: 'claude.ai에 저장됩니다', replace: '검토 서버에 저장됩니다', why: '저장 위치 안내' },
 ];
 
-// 머리 오른쪽 위 「나가기」(세션 쿠키 지우기) — 치환 한 곳 + 스타일 한 줄. --no-exit이면 넣지 않는다.
+// 머리 오른쪽 위 「로그아웃」(세션 쿠키 지우기) — 치환 한 곳 + 스타일. --no-exit이면 넣지 않는다.
+// 9/30: 「나가기」 → 「로그아웃」 · 크게 · 테두리 · 첫 줄(탭 줄) 오른쪽에 자리를 비워 탭과 겹치지 않게
 const EXIT_PATCH = {
   find: '<header class="top">',
-  replace: '<header class="top">\n    <a class="nr-exit" href="/api/logout">나가기</a>',
-  why: '나가기 링크',
+  replace: '<header class="top">\n    <a class="nr-exit" href="/api/logout" title="로그아웃 — 다른 검토자 코드로 들어갈 때도 먼저 로그아웃">로그아웃</a>',
+  why: '로그아웃 버튼',
 };
-const EXIT_CSS = '.nr-exit{position:absolute;top:5px;right:14px;z-index:3;font-size:11.5px;line-height:1.4;color:var(--muted);text-decoration:none}'
-  + '.nr-exit:hover,.nr-exit:focus-visible{color:var(--accent);text-decoration:underline}';
+const EXIT_CSS = '.nr-exit{position:absolute;top:12px;right:16px;z-index:3;display:inline-flex;align-items:center;padding:7px 16px;border:2px solid var(--line-strong);border-radius:10px;background:var(--surface);color:var(--ink);font-size:14.5px;font-weight:700;line-height:1.25;text-decoration:none;box-shadow:0 1px 0 var(--line)}'
+  + '.nr-exit:hover,.nr-exit:focus-visible{border-color:var(--accent);color:var(--accent)}'
+  + 'header.top>.top-row:first-of-type{padding-right:124px}'
+  + '@media (max-width:640px){header.top>.top-row:first-of-type{padding-right:0;padding-top:44px}}';
 
 // 웹앱에 남으면 어색한 말 — 빌드 끝에 위치를 보여 준다(멈추지는 않음). DATA 안은 보지 않는다.
 const ARTIFACT_WORDS = /claude\.ai|아티팩트|artifact|Claude 계정|claude 계정/gi;
