@@ -1,4 +1,4 @@
--- 9/30 검토 시간(일별) — time 컬렉션 + 바뀐 칸만 합치는 저장(nr_patch_doc)
+-- 9/29 검토 시간(일별) — time 컬렉션 + 바뀐 칸만 합치는 저장(nr_patch_doc)
 --   검토자마다 문서 1개: id = t_<로그인 이름 UTF-8 hex>, body = {kind:'time', name, dev:{<기기>:{days:{'YYYY-MM-DD': 초}, at, paused}}, at}
 --   화면이 5분마다 · 일시정지 · 창을 닫을 때 저장한다. 읽기·쓰기 권한(관리자 전체 · 검토자 자기 문서만 · 보기 전용 없음)은 app/api/docs가 거른다.
 --   저장이 잦아 doc_history에는 남기지 않는다(나머지 컬렉션은 그대로 남김).
@@ -65,7 +65,7 @@ begin
 end;
 $function$;
 
--- 9/30 동시 저장 보호: 바뀐 칸만 합치는 저장(patch). 화면이 「이 사람이 고친 칸」 목록(paths)을 보내면
+-- 9/29 동시 저장 보호: 바뀐 칸만 합치는 저장(patch). 화면이 「이 사람이 고친 칸」 목록(paths)을 보내면
 --   서버가 그 순간의 DB 문서를 잠그고(for update) 그 칸만 바꾼다 → 관리자 판정과 검토자 입력이 서로를 덮어쓰지 않음.
 --   paths: 'verdict' 같은 맨 위 칸 또는 'a.h4' · 'nt.h4x'처럼 한 단계 아래 칸. 저장자 · 시각 칸(by_name · by · at · src · imported_by · rv_name)은 보낸 값으로.
 create or replace function public.nr_patch_doc(p_secret text, p_coll text, p_id text, p_body jsonb, p_paths text[], p_by text default null::text)
