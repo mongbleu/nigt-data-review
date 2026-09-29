@@ -160,7 +160,7 @@ const SHIM_API = {
   use: ['db', 'user', 'downloads'],
   db: ['collection', 'doc'],
   ref: ['onSnapshot', 'set'],               // db.collection(c).* · db.doc(p).*
-  user: ['id', 'can', 'isOwner', 'canEdit'],
+  user: ['id', 'can', 'isOwner', 'canEdit', 'name', 'role'],
   downloads: ['save'],
 };
 export function shimCoverage(js) {
