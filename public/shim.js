@@ -1,7 +1,7 @@
 /* window.claude 호환 shim — 검토 화면(review.html)의 앱 스크립트가 런타임에 쓰는 부분만 구현한다.
  *   (scripts/build_page.mjs가 앱 스크립트 바로 앞에 넣는다. 본문이 쓰는 API가 이 범위를 넘으면 빌드가 경고한다.)
  *   use('db')        collection(c).onSnapshot · doc('c/id').onSnapshot · doc('c/id').set
- *   use('user')      id() · can('data.write') · isOwner() · canEdit()
+ *   use('user')      id() · can('data.write') · isOwner() · canEdit() · name() · role()   (name·role = 로그인한 검토자 — 웹앱 전용)
  *   use('downloads') save({filename, data})
  * 저장소는 /api/docs (서버가 Supabase에 기록). 구독은 즉시 한 번 읽고, 화면이 보일 때 15초마다 폴링한다.
  */
@@ -49,7 +49,12 @@
       throw fail('unavailable', 'network error');
     }
     if (res.status === 401) { toLogin(); throw fail('unauthenticated', 'login required'); }
-    if (res.status === 403) throw fail('invalid_argument', 'forbidden');
+    if (res.status === 403) {
+      let why = '';
+      try { why = ((await res.json()) || {}).error || ''; } catch (e) { /* 본문 없음 */ }
+      // 담당이 아닌 요소 저장 → 그 요소만 거절(앱이 알림) · 보기 전용·권한 없음 → 공용 저장 불가로 처리
+      throw fail(why === 'not_assigned' ? 'permission_denied' : 'invalid_argument', why || 'forbidden');
+    }
     if (res.status === 413) throw fail('quota_exceeded', 'payload too large');
     if (res.status >= 500) throw fail('unavailable', `server error ${res.status}`);
     if (!res.ok) throw fail('failed_precondition', `request failed ${res.status}`);
@@ -248,16 +253,18 @@
   let rolePromise = null;
   function role() {
     if (!rolePromise) {
-      rolePromise = call('GET', '/api/session').then(r => (r && r.role) || null, e => { rolePromise = null; throw e; });
+      rolePromise = call('GET', '/api/session').then(r => ({ role: (r && r.role) || null, name: (r && r.name) || null }), e => { rolePromise = null; throw e; });
     }
     return rolePromise;
   }
 
   const user = {
     id: async () => pseudoId(),
-    can: async (cap) => cap === 'data.write',
-    isOwner: async () => (await role()) === 'adm',
-    canEdit: async () => (await role()) === 'adm',
+    can: async (cap) => cap === 'data.write' && ['adm', 'rv'].includes((await role()).role),
+    isOwner: async () => (await role()).role === 'adm',
+    canEdit: async () => (await role()).role === 'adm',
+    name: async () => (await role()).name,
+    role: async () => (await role()).role,
   };
 
   // ---------- downloads
