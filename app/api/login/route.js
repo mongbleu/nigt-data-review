@@ -9,6 +9,9 @@ export const dynamic = 'force-dynamic';
 
 const FAIL_DELAY_MS = 500;
 const ADMIN_NAME = '정유정';
+// 9/29: 환경변수·입력의 앞뒤 공백은 떼고, 공용·관리자 코드는 대소문자 · 가운데 공백 · 하이픈 차이도 같은 코드로 본다
+const clean = s => String(s || '').trim();
+const loose = s => clean(s).replace(/[\s-]+/g, '').toLowerCase();
 
 async function readCode(request) {
   const ct = (request.headers.get('content-type') || '').toLowerCase();
@@ -44,16 +47,22 @@ async function matchReviewer(code, secret) {
 export async function POST(request) {
   const raw = (await readCode(request)).trim().slice(0, 256);
   const secret = authSecret();
-  const accessCode = process.env.ACCESS_CODE || '';
-  const adminCode = process.env.ADMIN_CODE || '';
+  const accessCode = clean(process.env.ACCESS_CODE);
+  const adminCode = clean(process.env.ADMIN_CODE);
   if (!secret) {
     console.error('[login] AUTH_SECRET(16자 이상) 또는 APP_SECRET을 설정해야 합니다');
     return seeOther('/login?e=2');
   }
   // 세 가지를 모두 비교 (응답 시간으로 구분되지 않게)
-  const [rv, isAdm, isView] = await Promise.all([matchReviewer(raw, secret), codeMatches(raw, adminCode), codeMatches(raw, accessCode)]);
-  const who = rv || (isAdm ? { role: 'adm', name: ADMIN_NAME } : isView ? { role: 'view', name: null } : null);
+  const [rv, isAdm, isView, admL, viewL] = await Promise.all([matchReviewer(raw, secret), codeMatches(raw, adminCode), codeMatches(raw, accessCode),
+    codeMatches(loose(raw), loose(adminCode)), codeMatches(loose(raw), loose(accessCode))]);
+  const adm = isAdm || admL, view = isView || viewL;
+  const who = rv || (adm ? { role: 'adm', name: ADMIN_NAME } : view ? { role: 'view', name: null } : null);
   if (!who) {
+    // 진단용(값은 남기지 않음): 환경변수가 있는지 · 앞뒤 공백이 있었는지 · 검토자 코드 모양인지
+    console.warn('[login] 코드 불일치', JSON.stringify({ admin_set: !!adminCode, access_set: !!accessCode,
+      admin_env_had_space: (process.env.ADMIN_CODE || '') !== adminCode, access_env_had_space: (process.env.ACCESS_CODE || '') !== accessCode,
+      reviewer_like: CODE_RE.test(normalizeCode(raw)), input_empty: !raw }));
     await new Promise(r => setTimeout(r, FAIL_DELAY_MS));
     return seeOther('/login?e=1');
   }
