@@ -1,7 +1,7 @@
 // GET  /api/docs?coll=reviews|answers|config[&since=<cursor>] → {docs:[{id, body, by_name, updated_at}], cursor}
-// POST /api/docs {coll, id, body} → {ok:true, at}
-import { roleFromRequest } from '../../../lib/auth.js';
-import { COLLS, listDocs, setDoc } from '../../../lib/store.js';
+// POST /api/docs {coll, id, body} → {ok:true, at}   (보기 전용 403 read_only · 검토자는 담당 요소만 — 아니면 403 not_assigned)
+import { sessionFromRequest, WRITE_ROLES } from '../../../lib/auth.js';
+import { COLLS, listDocs, setDoc, ownerOf } from '../../../lib/store.js';
 import { json } from '../../../lib/http.js';
 
 export const runtime = 'nodejs';
@@ -13,7 +13,7 @@ const MAX_BODY_BYTES = 64 * 1024;
 const SINCE_OVERLAP_MS = 60_000;
 
 export async function GET(request) {
-  if (!(await roleFromRequest(request))) return json({ error: 'unauthorized' }, 401);
+  if (!(await sessionFromRequest(request))) return json({ error: 'unauthorized' }, 401);
   const params = new URL(request.url).searchParams;
   const coll = params.get('coll');
   if (!COLLS.includes(coll)) return json({ error: 'invalid_coll' }, 400);
@@ -40,8 +40,11 @@ export async function GET(request) {
 }
 
 export async function POST(request) {
-  const role = await roleFromRequest(request);
-  if (!role) return json({ error: 'unauthorized' }, 401);
+  const sess = await sessionFromRequest(request);
+  if (!sess) return json({ error: 'unauthorized' }, 401);
+  const role = sess.role;
+  // 보기 전용(공용 코드 · 예전 공용 쿠키)은 저장 못 함
+  if (!WRITE_ROLES.has(role)) return json({ error: 'read_only' }, 403);
 
   const ct = (request.headers.get('content-type') || '').toLowerCase();
   if (!ct.startsWith('application/json')) return json({ error: 'unsupported_media_type' }, 415);
@@ -59,7 +62,16 @@ export async function POST(request) {
   if (typeof id !== 'string' || !ID_RE.test(id)) return json({ error: 'invalid_id' }, 400);
   if (!body || typeof body !== 'object' || Array.isArray(body)) return json({ error: 'invalid_body' }, 400);
   if (new TextEncoder().encode(JSON.stringify(body)).length > MAX_BODY_BYTES) return json({ error: 'too_large' }, 413);
-  if (coll === 'config' && role !== 'adm') return json({ error: 'forbidden' }, 403);
+  if ((coll === 'config' || coll === 'answers') && role !== 'adm') return json({ error: 'forbidden' }, 403);
+  // 검토자: 자기 담당 요소 문서(reviews/e_<요소ID>)만, 저장자 이름은 로그인한 이름으로
+  if (role === 'rv') {
+    const m = /^e_([A-E]-\d{3})$/.exec(id);
+    if (coll !== 'reviews' || !m) return json({ error: 'forbidden' }, 403);
+    let owner;
+    try { owner = await ownerOf(m[1]); } catch (e) { console.error('[POST /api/docs] owner lookup failed:', e && e.message); return json({ error: 'store_unavailable' }, 502); }
+    if (!owner || owner !== sess.name) return json({ error: 'not_assigned' }, 403);
+    body.by_name = sess.name;
+  }
 
   const byName = typeof body.by_name === 'string' ? body.by_name.slice(0, 80) : null;
   try {
