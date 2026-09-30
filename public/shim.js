@@ -14,7 +14,7 @@
   const IDLE_POLL_MS = 60 * 1000;
   const REFRESH_AFTER_SET_MS = 800;
   const KEEPALIVE_MAX_BYTES = 60000; // 페이지를 닫는 중에도 저장 요청이 끝나도록 (브라우저 한도 64KB)
-  const COLLS = new Set(['reviews', 'answers', 'config', 'time']);   // time(9/30): 검토 시간 — 서버가 관리자에게만 전체, 검토자에게는 자기 문서만 줌
+  const COLLS = new Set(['reviews', 'answers', 'config', 'time', 'profile']);   // time(9/30): 검토 시간 — 서버가 관리자에게만 전체, 검토자에게는 자기 문서만 줌 · profile(9/29 밤): 검토자 캐릭터 — 모두 읽음
   const ID_RE = /^[A-Za-z0-9_\-]{1,80}$/;
 
   const enc = new TextEncoder();
