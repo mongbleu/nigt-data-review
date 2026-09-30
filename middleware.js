@@ -5,12 +5,16 @@ import { NextResponse } from 'next/server';
 import { roleFromRequest } from './lib/auth.js';
 
 // /api/logout은 세션이 이미 만료된 상태에서도 로그인 화면으로 보내야 하므로 공개
-const PUBLIC_PATHS = new Set(['/login', '/api/login', '/api/logout', '/favicon.ico']);
+// 9/30: 📱 앱 설치(홈 화면에 추가) — 설치 정보(manifest)와 아이콘은 로그인 전에도 읽혀야 함(브라우저가 쿠키 없이 가져감)
+const PUBLIC_PATHS = new Set(['/login', '/api/login', '/api/logout', '/favicon.ico', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png', '/icon-maskable-512.png', '/apple-touch-icon.png', '/apple-touch-icon-precomposed.png']);
 const PAGE = '/review.html';
 
 export async function middleware(request) {
   const { pathname } = request.nextUrl;
-  if (PUBLIC_PATHS.has(pathname) || pathname.startsWith('/_next/')) return NextResponse.next();
+  if (PUBLIC_PATHS.has(pathname) || pathname.startsWith('/_next/')) {
+    if (pathname === '/apple-touch-icon-precomposed.png') return NextResponse.rewrite(new URL('/apple-touch-icon.png', request.url));
+    return NextResponse.next();
+  }
 
   const role = await roleFromRequest(request);
   if (role) {
