@@ -1,6 +1,6 @@
 /* window.claude 호환 shim — 검토 화면(review.html)의 앱 스크립트가 런타임에 쓰는 부분만 구현한다.
  *   (scripts/build_page.mjs가 앱 스크립트 바로 앞에 넣는다. 본문이 쓰는 API가 이 범위를 넘으면 빌드가 경고한다.)
- *   use('db')        collection(c).onSnapshot · doc('c/id').onSnapshot · doc('c/id').set
+ *   use('db')        collection(c).onSnapshot · collection(c).refresh() · doc('c/id').onSnapshot · doc('c/id').set   (refresh = 지금 한 번 더 읽기 — 채팅 창을 열었을 때 등, 2.5초에 한 번까지)
  *   use('user')      id() · can('data.write') · isOwner() · canEdit() · name() · role()   (name·role = 로그인한 검토자 — 웹앱 전용)
  *   use('downloads') save({filename, data})
  * 저장소는 /api/docs (서버가 Supabase에 기록). 구독은 즉시 한 번 읽고, 화면이 보일 때 15초마다 폴링한다.
@@ -14,7 +14,8 @@
   const IDLE_POLL_MS = 60 * 1000;
   const REFRESH_AFTER_SET_MS = 800;
   const KEEPALIVE_MAX_BYTES = 60000; // 페이지를 닫는 중에도 저장 요청이 끝나도록 (브라우저 한도 64KB)
-  const COLLS = new Set(['reviews', 'answers', 'config', 'time', 'profile']);   // time(9/30): 검토 시간 — 서버가 관리자에게만 전체, 검토자에게는 자기 문서만 줌 · profile(9/29 밤): 검토자 캐릭터 — 모두 읽음
+  const COLLS = new Set(['reviews', 'answers', 'config', 'time', 'profile', 'chat']);   // time(9/30): 검토 시간 — 서버가 관리자에게만 전체, 검토자에게는 자기 문서만 줌 · profile(9/29 밤): 검토자 캐릭터 — 모두 읽음 · chat(9/30): 검토팀 채팅 — 검토자 · 관리자만(보기 전용은 빈 목록)
+  const REFRESH_MIN_MS = 2500;
   const ID_RE = /^[A-Za-z0-9_\-]{1,80}$/;
 
   const enc = new TextEncoder();
@@ -225,7 +226,10 @@
   const db = {
     collection(coll) {
       checkColl(coll);
-      return { onSnapshot: (cb, err) => subscribe(coll, { id: null, cb, err }) };
+      return {
+        onSnapshot: (cb, err) => subscribe(coll, { id: null, cb, err }),
+        refresh: () => { const ch = channel(coll); if (ch.inflight || Date.now() - ch.lastTry < REFRESH_MIN_MS) return ch.inflight || Promise.resolve(); return refresh(ch); },
+      };
     },
     doc(p) {
       const { coll, id } = parsePath(p);
