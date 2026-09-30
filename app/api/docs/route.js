@@ -1,10 +1,13 @@
-// GET  /api/docs?coll=reviews|answers|config|time|profile[&since=<cursor>] → {docs:[{id, body, by_name, updated_at}], cursor}
+// GET  /api/docs?coll=reviews|answers|config|time|profile|chat[&since=<cursor>] → {docs:[{id, body, by_name, updated_at}], cursor}
 // POST /api/docs {coll, id, body} → {ok:true, at}   (보기 전용 403 read_only · 검토자는 담당 요소만 — 아니면 403 not_assigned)
 // POST paths(9/30, reviews만): 고친 칸 목록 → 서버가 그 순간의 DB 문서에 그 칸만 합침(응답에 합친 문서 body). 검토자는 관리 칸(판정 · 근거 요약 · 요청 문장 …)을 못 바꿈
 // time(9/30 검토 시간): 문서 id = t_<로그인 이름 UTF-8 hex>. 쓰기 = 자기 문서만(서버가 모양을 다시 만듦) · 읽기 = 관리자 전체 / 검토자 자기 것 / 보기 전용 없음
 // profile(9/29 밤 검토자 캐릭터): 문서 id = p_<로그인 이름 UTF-8 hex>. 쓰기 = 자기 문서만(캐릭터 · 테두리 색만 받아 서버가 다시 만듦) · 읽기 = 모두(순위에 보임)
+// chat(9/30 검토팀 채팅): 문서 id = m_<시각 36진수>_<무작위>_<작성자 이름 UTF-8 hex>. 읽기 · 쓰기 = 검토자 · 관리자만(보기 전용은 빈 목록 · 403)
+//   쓰기 = 자기 메시지만(글 · 응원/질문 표시 · 답하는 글 id만 받아 서버가 다시 만들고 시각은 서버 시각) · 지우기 = {del:true}(관리자는 남의 메시지도 지우기만)
+//   처음 읽을 때는 최근 CHAT_KEEP개만 보낸다(이어 읽기는 바뀐 것만)
 import { sessionFromRequest, WRITE_ROLES } from '../../../lib/auth.js';
-import { COLLS, listDocs, setDoc, patchDoc, ownerOf, timeIdOf, profileIdOf, PATH_RE } from '../../../lib/store.js';
+import { COLLS, listDocs, setDoc, patchDoc, ownerOf, timeIdOf, profileIdOf, hexOf, nameOfHex, PATH_RE } from '../../../lib/store.js';
 import { json } from '../../../lib/http.js';
 
 export const runtime = 'nodejs';
@@ -12,7 +15,7 @@ export const dynamic = 'force-dynamic';
 
 const ID_RE = /^[A-Za-z0-9_\-]{1,80}$/;
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
-// 관리 칸(정유정 몫) — 검토자 저장에서는 받지 않고 DB 값을 둔다
+// 관리 칸(관리자 몫) — 검토자 저장에서는 받지 않고 DB 값을 둔다
 const ADMIN_KEYS = ['verdict', 'evid', 'req', 'dec', 'spn', 'flags', 'flagnote', 'sugg', 'ptype'];
 const DEV_RE = /^[A-Za-z0-9_\-]{1,40}$/;
 
@@ -40,6 +43,25 @@ function cleanProfile(body, name) {
   if (!body || !CHAR_IDS.includes(body.char) || !COLOR_IDS.includes(body.color)) return null;
   return { kind: 'profile', name, char: body.char, color: body.color, at: new Date().toISOString(), by_name: name };
 }
+// 채팅: 글 300자 · 표시(응원 · 질문) · 답하는 글 id — 그 밖의 칸은 버린다. 이름 · 시각 · 저장자는 서버가 채움
+const CHAT_ID_RE = /^m_([0-9a-z]{6,10})_([0-9a-z]{3,10})_((?:[0-9a-f]{2}){1,30})$/;
+const CHAT_TAGS = ['cheer', 'q'];
+const CHAT_MAX_TEXT = 300;
+const CHAT_KEEP = 300;
+const CTRL_RE = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g;
+function cleanChat(body, id, author, byName, del) {
+  const at = new Date().toISOString();
+  if (del) {
+    const ts = Number(body.ts);
+    return { kind: 'chat', name: author, text: '', tag: '', ts: Number.isFinite(ts) && ts > 0 ? Math.round(ts) : Date.now(), del: true, at, by_name: byName };
+  }
+  const text = (typeof body.text === 'string' ? body.text : '').replace(/\r\n?/g, '\n').replace(CTRL_RE, '').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+  if (!text || text.length > CHAT_MAX_TEXT) return null;
+  const out = { kind: 'chat', name: author, text, tag: CHAT_TAGS.includes(body.tag) ? body.tag : '', ts: Date.now(), at, by_name: byName };
+  if (typeof body.re === 'string' && body.re !== id && CHAT_ID_RE.test(body.re)) out.re = body.re;
+  return out;
+}
+const chatTs = d => { const t = d && d.body && Number(d.body.ts); return Number.isFinite(t) ? t : 0; };
 const MAX_BODY_BYTES = 64 * 1024;
 // since 조회는 이 만큼 겹쳐서 다시 보낸다 — 커밋 순서와 updated_at 순서가 어긋나도 놓치지 않게
 const SINCE_OVERLAP_MS = 60_000;
@@ -63,6 +85,11 @@ export async function GET(request) {
     if (coll === 'time' && sess.role !== 'adm') {
       const own = sess.role === 'rv' && sess.name ? timeIdOf(sess.name) : null;
       docs = own ? docs.filter(d => d.id === own) : [];
+    }
+    // 채팅: 검토자 · 관리자만. 처음 읽을 때는 최근 CHAT_KEEP개만
+    if (coll === 'chat') {
+      if (!WRITE_ROLES.has(sess.role)) docs = [];
+      else if (sinceMs == null && docs.length > CHAT_KEEP) docs = docs.slice().sort((a, b) => chatTs(b) - chatTs(a)).slice(0, CHAT_KEEP);
     }
     // cursor = 지금까지 본 가장 늦은 updated_at (되돌아가지 않음)
     let cursor = sinceRaw || null, cursorMs = sinceMs ?? -Infinity;
@@ -118,6 +145,19 @@ export async function POST(request) {
     if (!sess.name || id !== profileIdOf(sess.name)) return json({ error: 'forbidden' }, 403);
     if (paths) return json({ error: 'invalid_paths' }, 400);
     body = cleanProfile(body, sess.name);
+    if (!body) return json({ error: 'invalid_body' }, 400);
+  }
+  // 채팅: 자기 메시지(id 끝 = 로그인 이름 hex)만 — 관리자는 남의 메시지를 지우기({del:true})만. 몸체는 서버가 다시 만든다
+  else if (coll === 'chat') {
+    if (paths) return json({ error: 'invalid_paths' }, 400);
+    const m = CHAT_ID_RE.exec(id);
+    if (!m) return json({ error: 'invalid_id' }, 400);
+    const del = body.del === true;
+    const own = !!sess.name && m[3] === hexOf(sess.name);
+    if (!own && !(del && role === 'adm')) return json({ error: 'forbidden' }, 403);
+    const author = own ? sess.name : nameOfHex(m[3]);
+    if (!author) return json({ error: 'invalid_id' }, 400);
+    body = cleanChat(body, id, author, sess.name || author, del);
     if (!body) return json({ error: 'invalid_body' }, 400);
   }
   // 검토자: 자기 담당 요소 문서(reviews/e_<요소ID>)만, 저장자 이름은 로그인한 이름으로
