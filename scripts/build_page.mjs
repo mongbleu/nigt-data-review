@@ -12,6 +12,8 @@
 //   3. shim(/shim.js — window.claude 대역)을 앱 스크립트 바로 앞에 넣는다.
 //   4. 문자열 치환(PATCHES) — 치환마다 정확히 정해진 횟수만 맞는지 확인하고, 아니면 멈춘다.
 //   5. 인라인 앱 스크립트의 sha256을 계산해 <meta http-equiv="Content-Security-Policy">에 넣는다.
+//   6. (9/30) DATA.build.id(화면 판 번호)를 <meta name="nr-build">로 넣는다 — Vercel 빌드 때 scripts/fetch_page.mjs가 읽어
+//      public/version.json을 만들고, 열어 둔 화면이 그 파일로 새 판을 알아챈다(「지금 업데이트」 안내).
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -162,7 +164,7 @@ async function ensureVendor(useCdn) {
 const SHIM_API = {
   use: ['db', 'user', 'downloads'],
   db: ['collection', 'doc'],
-  ref: ['onSnapshot', 'set'],               // db.collection(c).* · db.doc(p).*
+  ref: ['onSnapshot', 'set', 'refresh'],    // db.collection(c).* · db.doc(p).*   (refresh — 9/30 채팅: 지금 한 번 더 읽기)
   user: ['id', 'can', 'isOwner', 'canEdit', 'name', 'role'],
   downloads: ['save'],
 };
@@ -218,10 +220,12 @@ export async function buildPage(opts) {
   // DATA 확인 (건드리지 않고 읽어만 본다)
   let scripts = scanScripts(markup);
   const dataBlock = scripts.find(x => /\bid\s*=\s*["']data["']/.test(x.attrs));
-  let items = null;
+  let items = null, buildId = null;
   try {
     const data = JSON.parse(dataBlock.text);
     items = Array.isArray(data.items) ? data.items.length : null;
+    const b = data.build && typeof data.build === 'object' ? data.build.id : null;
+    if (typeof b === 'string' && /^[A-Za-z0-9_.-]{1,40}$/.test(b)) buildId = b;
   } catch (e) {
     fail(`DATA JSON을 읽지 못했습니다: ${e.message}`);
   }
@@ -268,6 +272,7 @@ export async function buildPage(opts) {
     '<meta charset="utf-8">',
     '<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">',
     '<meta name="robots" content="noindex, nofollow">',
+    ...(buildId ? [`<meta name="nr-build" content="${buildId}">`] : []),
     `<meta http-equiv="Content-Security-Policy" content="${csp}">`,
     '<link rel="icon" href="data:,">',
     `<title>${title}</title>`,
@@ -300,6 +305,7 @@ export async function buildPage(opts) {
     out: opts.out,
     bytes: Buffer.byteLength(html, 'utf8'),
     items,
+    build: buildId,
     title,
     xlsx: vendor.mode,
     xlsx_note: vendor.note || null,
@@ -326,7 +332,7 @@ if (isMain) {
   }
   buildPage(opts).then(r => {
     console.log(`만듦: ${path.relative(process.cwd(), r.out) || r.out}`);
-    console.log(`  크기 ${(r.bytes / 1048576).toFixed(2)}MB (${r.bytes} bytes) · 데이터 요소 ${r.items}개 · 제목 「${r.title}」`);
+    console.log(`  크기 ${(r.bytes / 1048576).toFixed(2)}MB (${r.bytes} bytes) · 데이터 요소 ${r.items}개 · 제목 「${r.title}」 · 화면 판 ${r.build || '(없음)'}`);
     console.log(`  엑셀 라이브러리: ${r.xlsx === 'vendor' ? '같은 서버(/vendor/xlsx.bundle.js)' : 'CDN'}${r.xlsx_note ? ` — ${r.xlsx_note}` : ''}`);
     console.log(`  치환: ${r.patches.length ? r.patches.join(', ') : '없음'}`);
     console.log(`  CSP 스크립트 해시 ${r.script_hashes.length}개 · sha256 ${r.sha256.slice(0, 16)}…`);

@@ -1,6 +1,8 @@
 // fetch_page — Vercel 빌드 때 검토 화면 파일을 받아 public/ 에 놓는다(배포 파일을 작게 유지).
 //   1. public/review.html : Supabase nr_review.assets 에서 조각을 받아 이어 붙이고 sha256 확인 (APP_SECRET 필요)
 //   2. public/vendor/xlsx.bundle.js : jsDelivr 에서 받아 sha384(SRI) 확인
+//   3. public/version.json : (9/30) 검토 화면의 판 번호(<meta name="nr-build">) — 열어 둔 화면이 몇 분마다 읽어 새 판이면 「지금 업데이트」를 띄움
+//      (로그인한 사람만 읽힘 — middleware가 보호). 판 번호가 없는 옛 화면이면 만들지 않는다.
 // 이미 있는 파일은 건드리지 않는다(로컬 빌드). 환경변수가 없으면 「설정 필요」 안내 페이지를 만들고 빌드는 계속한다.
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -13,6 +15,7 @@ const VENDOR = path.join(ROOT, 'public', 'vendor', 'xlsx.bundle.js');
 const XLSX_CDN = 'https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js';
 const XLSX_SRI = 'sha384-OUW9euuUyxyHcAhTqbhI+Iyb8LMssXt/cpz0yXhs9UWG2/R/uaWdakx/4cfww7Vb';
 const ASSET = 'review.html';
+const VERSION = path.join(ROOT, 'public', 'version.json');
 
 const exists = p => fs.access(p).then(() => true, () => false);
 const hash = (alg, buf, enc = 'hex') => createHash(alg).update(buf).digest(enc);
@@ -68,5 +71,16 @@ async function vendor() {
   console.log(`fetch_page: vendor/xlsx.bundle.js ${buf.length} bytes (SRI 확인)`);
 }
 
+// 화면 파일의 판 번호 → public/version.json (매번 새로 씀 — 로컬 빌드도 화면과 맞게)
+async function version() {
+  if (!(await exists(PAGE))) return;
+  const head = (await fs.readFile(PAGE, 'utf8')).slice(0, 20000);
+  const m = head.match(/<meta name="nr-build" content="([A-Za-z0-9_.-]{1,40})">/);
+  if (!m) { await fs.rm(VERSION, { force: true }); console.log('fetch_page: 화면에 판 번호가 없음 — version.json 만들지 않음'); return; }
+  await fs.writeFile(VERSION, JSON.stringify({ build: m[1] }) + '\n');
+  console.log(`fetch_page: version.json 판 ${m[1]}`);
+}
+
 await vendor();
 await page();
+await version();
