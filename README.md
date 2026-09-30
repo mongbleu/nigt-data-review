@@ -33,21 +33,22 @@
 |---|---|
 | `middleware.js` | 세션 쿠키 확인 → `/`에 검토 화면, 아니면 `/login` |
 | `app/api/login` · `logout` · `session` | 로그인(검토자 · 관리자 · 공용 코드) · 로그아웃 · 이름 · 권한 |
-| `app/api/docs` | 검토 문서 읽기/쓰기 — 보기 전용은 403, 검토자는 담당 요소만, `config`는 관리자만. **고친 칸만 합치는 저장**(`paths` → DB 문서를 잠그고 그 칸만 바꿈 — 관리자 판정과 검토자 입력이 서로 덮어쓰지 않음, 검토자는 관리 칸을 못 바꿈) · **검토 시간**(`time` — 관리자 전체 · 검토자 자기 문서만) · **검토자 캐릭터**(`profile` — 모두 읽음 · 자기 문서 `p_<이름 hex>`만 씀, 서버가 캐릭터(그린이 · 곰곰이 · 본부장님) · 테두리 색(6가지)만 받아 다시 만듦 · `paths` 거절) |
+| `app/api/docs` | 검토 문서 읽기/쓰기 — 보기 전용은 403, 검토자는 담당 요소만, `config`는 관리자만. **고친 칸만 합치는 저장**(`paths` → DB 문서를 잠그고 그 칸만 바꿈 — 관리자 판정과 검토자 입력이 서로 덮어쓰지 않음, 검토자는 관리 칸을 못 바꿈) · **검토 시간**(`time` — 관리자 전체 · 검토자 자기 문서만) · **검토자 캐릭터**(`profile` — 모두 읽음 · 자기 문서 `p_<이름 hex>`만 씀, 서버가 캐릭터(그린이 · 곰곰이 · 본부장님) · 테두리 색(6가지)만 받아 다시 만듦 · `paths` 거절) · **검토팀 채팅**(`chat` — 검토자 · 관리자만 읽고 씀, 보기 전용은 빈 목록 · 메시지 id `m_<시각>_<무작위>_<이름 hex>`로 자기 메시지만, 관리자는 남의 메시지 지우기만 · 서버가 이름 · 시각을 채우고 글 300자 · 표시(응원 · 질문) · 답글 id만 받음 · 처음 읽기는 최근 300개) |
 | `app/api/codes` | 검토자 코드 목록(관리자 세션만) |
 | `app/api/backups` | **DB 매일 자동 백업** 목록 · 날짜별 내려받기(관리자 세션만) — Supabase Cron이 매일 23:55(한국 시각)에 검토 문서 전체를 떠 둔 것(30일 보관). 내려받은 JSON은 화면 백업과 같은 모양이라 「가져오기」로 되올림 |
 | `lib/auth.js` | 세션 쿠키 · 검토자 코드 계산 |
-| `lib/store.js` | Supabase RPC(`nr_list_docs` · `nr_set_doc` · `nr_patch_doc` · `nr_get_setting` · `nr_list_backups` · `nr_get_backup`) · 컬렉션(reviews · answers · config · time · profile — time · profile은 저장 이력에 안 남김) |
-| `public/shim.js` | 아티팩트 저장 API(`window.claude`) 대역 |
-| `scripts/fetch_page.mjs` | 빌드 때 화면 파일 받기(sha256 확인) |
-| `scripts/build_page.mjs` | 새 판 본문 → `public/review.html`(새 판을 만들 때 씀) |
-| `supabase/*.sql` | DB 공간 · 화면 파일 · 검토자 코드 설정 · 검토 시간 · 고친 칸만 합치는 저장(`migration_time.sql`) · 매일 자동 백업(`migration_backup.sql` — pg_cron · 되살리기 SQL) · 검토자 캐릭터(`migration_profile.sql` — profile 컬렉션) 만들기, 지우기(모두 적용됨) |
+| `lib/store.js` | Supabase RPC(`nr_list_docs` · `nr_set_doc` · `nr_patch_doc` · `nr_get_setting` · `nr_list_backups` · `nr_get_backup`) · 컬렉션(reviews · answers · config · time · profile · chat — time · profile · chat은 저장 이력에 안 남김) |
+| `public/shim.js` | 아티팩트 저장 API(`window.claude`) 대역 · `collection(c).refresh()` 지금 다시 읽기(채팅 창을 펼쳤을 때) |
+| `scripts/fetch_page.mjs` | 빌드 때 화면 파일 받기(sha256 확인) · 화면 판 번호로 `public/version.json` 만들기(열어 둔 화면이 새 판을 알아채 「지금 업데이트」 — 로그인해야 읽힘) |
+| `scripts/build_page.mjs` | 새 판 본문 → `public/review.html`(새 판을 만들 때 씀) · 화면 판 번호 `<meta name="nr-build">` |
+| `supabase/*.sql` | DB 공간 · 화면 파일 · 검토자 코드 설정 · 검토 시간 · 고친 칸만 합치는 저장(`migration_time.sql`) · 매일 자동 백업(`migration_backup.sql` — pg_cron · 되살리기 SQL) · 검토자 캐릭터(`migration_profile.sql` — profile 컬렉션) · 검토팀 채팅(`migration_chat.sql` — chat 컬렉션) 만들기, 지우기(모두 적용됨) |
 
 ## 화면 판
 화면 파일은 Supabase에 올리고 settings `asset_sha256:review.html`에 sha256을 적은 뒤 재배포합니다. 서버 코드가 그대로면 이 저장소는 바뀌지 않습니다.
 
 | 날짜(KST) | 화면 sha256 | 바뀐 것 |
 |---|---|---|
+| 2026-09-30 11:00 | `74edf34b…` | 검토팀 채팅(오른쪽 아래 · 펼치기/접기 · 안 읽은 수 · 미리보기 말풍선 · 응원 버튼 · 「❓ 질문」 · 답하기 · 글 속 요소 코드 누르면 이동 · 내 글 지우기) · 새 버전 알림(열어 둔 화면에 「지금 업데이트」 — 쓰던 입력을 먼저 저장) · 업데이트 소식 팝업(판마다 한 번 · 「📢 업데이트 소식」으로 다시 보기) |
 | 2026-09-30 08:30 | `3fc7f702…` | 게임 대기실 모양(늘 밝은 화면 · 흰 바탕 · 머리 띠 · 젤리 단추 · 카드) · 상단 순위 게임 랭킹(👑 🥈 🥉 · LIVE · UP!) · 「🏆 검토자 현황」 탭(시상대 · 전체 순위 · 오늘의 MVP · 🎈 나의 현황 — 진행률 물풍선 · 100%에 팡 · 아이템 5종) · 검토자 캐릭터(그린이 · 곰곰이 · 본부장님 × 테두리 6색 — 처음 들어오면 고르기) · 저장 팝업 본부장님 한마디 |
 | 2026-09-29 18:16 | `eb8a9a82…` | 「관리」 탭 「DB 자동 백업 (매일 23:55)」 — 날짜별 목록 · 내려받기(JSON) |
 | 2026-09-29 17:30 | `79553160…` | 검토자 순위(진행률 · 1~3위 · 실시간) · 저장 후 응원 멘트(단계별 · 무작위) · 백업 구조(입력마다 기기 보관 · 저장 대기 · 자동 재시도 · 내 검토 파일(엑셀) · 백업(JSON) · 되올리기 · 오프라인 검토 파일 · 앱 오류 알림) · 엑셀 압축 |
