@@ -1,9 +1,10 @@
-// GET  /api/docs?coll=reviews|answers|config|time[&since=<cursor>] → {docs:[{id, body, by_name, updated_at}], cursor}
+// GET  /api/docs?coll=reviews|answers|config|time|profile[&since=<cursor>] → {docs:[{id, body, by_name, updated_at}], cursor}
 // POST /api/docs {coll, id, body} → {ok:true, at}   (보기 전용 403 read_only · 검토자는 담당 요소만 — 아니면 403 not_assigned)
 // POST paths(9/30, reviews만): 고친 칸 목록 → 서버가 그 순간의 DB 문서에 그 칸만 합침(응답에 합친 문서 body). 검토자는 관리 칸(판정 · 근거 요약 · 요청 문장 …)을 못 바꿈
 // time(9/30 검토 시간): 문서 id = t_<로그인 이름 UTF-8 hex>. 쓰기 = 자기 문서만(서버가 모양을 다시 만듦) · 읽기 = 관리자 전체 / 검토자 자기 것 / 보기 전용 없음
+// profile(9/29 밤 검토자 캐릭터): 문서 id = p_<로그인 이름 UTF-8 hex>. 쓰기 = 자기 문서만(캐릭터 · 테두리 색만 받아 서버가 다시 만듦) · 읽기 = 모두(순위에 보임)
 import { sessionFromRequest, WRITE_ROLES } from '../../../lib/auth.js';
-import { COLLS, listDocs, setDoc, patchDoc, ownerOf, timeIdOf, PATH_RE } from '../../../lib/store.js';
+import { COLLS, listDocs, setDoc, patchDoc, ownerOf, timeIdOf, profileIdOf, PATH_RE } from '../../../lib/store.js';
 import { json } from '../../../lib/http.js';
 
 export const runtime = 'nodejs';
@@ -31,6 +32,13 @@ function cleanTime(body, name) {
     out[k] = { days, at: typeof v.at === 'string' ? v.at.slice(0, 40) : null, paused: v.paused === true };
   }
   return { kind: 'time', name, dev: out, at: new Date().toISOString(), by_name: name };
+}
+// 캐릭터: 정해진 값만(그린이 · 곰곰이 · 본부장님 × 테두리 6색) — 그 밖의 칸은 버린다
+const CHAR_IDS = ['greenie', 'gomgom', 'boss'];
+const COLOR_IDS = ['c1', 'c2', 'c3', 'c4', 'c5', 'c6'];
+function cleanProfile(body, name) {
+  if (!body || !CHAR_IDS.includes(body.char) || !COLOR_IDS.includes(body.color)) return null;
+  return { kind: 'profile', name, char: body.char, color: body.color, at: new Date().toISOString(), by_name: name };
 }
 const MAX_BODY_BYTES = 64 * 1024;
 // since 조회는 이 만큼 겹쳐서 다시 보낸다 — 커밋 순서와 updated_at 순서가 어긋나도 놓치지 않게
@@ -103,6 +111,13 @@ export async function POST(request) {
   if (coll === 'time') {
     if (!sess.name || id !== timeIdOf(sess.name)) return json({ error: 'forbidden' }, 403);
     body = cleanTime(body, sess.name);
+    if (!body) return json({ error: 'invalid_body' }, 400);
+  }
+  // 캐릭터: 로그인한 사람 자기 문서(profile/p_<이름 hex>)만 — 몸체는 서버가 다시 만든다
+  else if (coll === 'profile') {
+    if (!sess.name || id !== profileIdOf(sess.name)) return json({ error: 'forbidden' }, 403);
+    if (paths) return json({ error: 'invalid_paths' }, 400);
+    body = cleanProfile(body, sess.name);
     if (!body) return json({ error: 'invalid_body' }, 400);
   }
   // 검토자: 자기 담당 요소 문서(reviews/e_<요소ID>)만, 저장자 이름은 로그인한 이름으로
