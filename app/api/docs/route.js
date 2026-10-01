@@ -6,12 +6,23 @@
 // chat(9/30 검토팀 채팅): 문서 id = m_<시각 36진수>_<무작위>_<작성자 이름 UTF-8 hex>. 읽기 · 쓰기 = 검토자 · 관리자만(보기 전용은 빈 목록 · 403)
 //   쓰기 = 자기 메시지만(글 · 응원/질문 표시 · 답하는 글 id만 받아 서버가 다시 만들고 시각은 서버 시각) · 지우기 = {del:true}(관리자는 남의 메시지도 지우기만)
 //   처음 읽을 때는 최근 CHAT_KEEP개만 보낸다(이어 읽기는 바뀐 것만)
+//   10/1 AI 자동 답변 · 관리자 휴대폰 알림(lib/autoreply.js) — 응답을 보낸 뒤(after)에 돈다: 검토자 채팅 저장 → onChatWrite(질문이면 알림 · 부재 중이면 자동 답변)
+//   · 채팅 읽기(검토자 · 관리자) → sweep(답 없는 질문 — 부재 중 · N분 지남 — 에 자동 답변, 인스턴스마다 20초에 한 번). 자동 답변 글(tag 'ai')은 서버만 씀
+import { after } from 'next/server';
 import { sessionFromRequest, WRITE_ROLES } from '../../../lib/auth.js';
 import { COLLS, listDocs, setDoc, patchDoc, ownerOf, timeIdOf, profileIdOf, hexOf, nameOfHex, PATH_RE } from '../../../lib/store.js';
 import { json } from '../../../lib/http.js';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+export const maxDuration = 60;   // 10/1 응답 뒤 자동 답변(AI 호출 30초까지)이 끝날 시간
+
+// 10/1 응답을 보낸 뒤에 돌릴 일(Next after) — 요청 밖(단위 시험)이면 그냥 뒤에서 돌림. 실패는 로그만. 자동 답변 모듈은 필요할 때만 불러옴
+const autoreply = () => import('../../../lib/autoreply.js');
+function later(task) {
+  const run = () => Promise.resolve().then(task).catch(e => console.error('[api/docs] 뒤처리 실패:', e && (e.code || e.message)));
+  try { after(run); } catch { void run(); }
+}
 
 const ID_RE = /^[A-Za-z0-9_\-]{1,80}$/;
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -89,7 +100,10 @@ export async function GET(request) {
     // 채팅: 검토자 · 관리자만. 처음 읽을 때는 최근 CHAT_KEEP개만
     if (coll === 'chat') {
       if (!WRITE_ROLES.has(sess.role)) docs = [];
-      else if (sinceMs == null && docs.length > CHAT_KEEP) docs = docs.slice().sort((a, b) => chatTs(b) - chatTs(a)).slice(0, CHAT_KEEP);
+      else {
+        if (sinceMs == null && docs.length > CHAT_KEEP) docs = docs.slice().sort((a, b) => chatTs(b) - chatTs(a)).slice(0, CHAT_KEEP);
+        later(async () => (await autoreply()).sweep());   // 10/1 답 없는 질문에 자동 답변(응답 뒤)
+      }
     }
     // cursor = 지금까지 본 가장 늦은 updated_at (되돌아가지 않음)
     let cursor = sinceRaw || null, cursorMs = sinceMs ?? -Infinity;
@@ -179,6 +193,8 @@ export async function POST(request) {
   const byName = typeof body.by_name === 'string' ? body.by_name.slice(0, 80) : null;
   try {
     const r = paths ? await patchDoc(coll, id, body, paths, byName) : await setDoc(coll, id, body, byName);
+    // 10/1 검토자 채팅 글 → 질문이면 관리자 휴대폰 알림 · 부재 중이면 자동 답변(응답 뒤)
+    if (coll === 'chat' && role !== 'adm' && !body.del) later(async () => (await autoreply()).onChatWrite(id, body));
     return json(r.body ? { ok: true, at: r.at, body: r.body } : { ok: true, at: r.at });
   } catch (e) {
     console.error('[POST /api/docs] failed:', e && e.message);
