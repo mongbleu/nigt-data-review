@@ -16,7 +16,8 @@
   "dependencies": {
     "next": "15.5.26",
     "react": "19.3.0",
-    "react-dom": "19.3.0"
+    "react-dom": "19.3.0",
+    "web-push": "^3.6.7"
   },
   "engines": {
     "node": "22.x"
