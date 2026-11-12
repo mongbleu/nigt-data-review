@@ -47,7 +47,7 @@
 | `app/api/codes` | 검토자 코드 목록(관리자 세션만) |
 | `app/api/backups` | **DB 매일 자동 백업** 목록 · 날짜별 내려받기(관리자 세션만) — Supabase Cron이 매일 23:55(한국 시각)에 검토 문서 전체를 떠 둔 것(30일 보관). 내려받은 JSON은 화면 백업과 같은 모양이라 「가져오기」로 되올림 |
 | `lib/auth.js` | 세션 쿠키 · 검토자 코드 계산 |
-| `lib/store.js` | Supabase RPC(`nr_list_docs` · `nr_set_doc` · `nr_patch_doc` · `nr_get_setting` · `nr_list_backups` · `nr_get_backup` · `nr_kv_*` · AI 참고 자료 `ai_ctx.json` 읽기) · 컬렉션(reviews · answers · config · time · profile · chat — time · profile · chat은 저장 이력에 안 남김) |
+| `lib/store.js` | Supabase RPC(`nr_list_docs` · `nr_set_doc` · `nr_patch_doc` · `nr_get_setting` · `nr_list_backups` · `nr_get_backup` · `nr_kv_*` · AI 참고 자료 `ai_ctx.json` 읽기) · 컬렉션(reviews · answers · config · time · profile · chat · game — time · profile · chat · game은 저장 이력에 안 남김) |
 | `public/shim.js` | 아티팩트 저장 API(`window.claude`) 대역 · `collection(c).refresh()` 지금 다시 읽기(채팅 창을 펼쳤을 때) |
 | `scripts/fetch_page.mjs` | 빌드 때 화면 파일 받기(sha256 확인) · 화면 판 번호로 `public/version.json` 만들기(열어 둔 화면이 새 판을 알아채 「지금 업데이트」 — 로그인해야 읽힘) |
 | `scripts/build_page.mjs` | 새 판 본문 → `public/review.html`(새 판을 만들 때 씀) · 화면 판 번호 `<meta name="nr-build">` · 앱 설치 태그(manifest · theme-color · 아이폰 아이콘 — `lib/page.js` `APP_HEAD`와 같은 내용) |
@@ -91,6 +91,26 @@
 - 관리자 화면 위쪽 알림 줄에도 보임(「닫기」 = 같은 기준 · 같은 단계면 다시 안 보임).
 - 충전한 뒤 「충전했어요」(두 번 눌러 확인) = 그 시각부터 다시 5달러에서 줄어듦(kv `ai_budget`).
 - 기록: 표 `nr_review.ai_usage` — 호출마다 시각 · 방식(자동 답변 | 초안) · 성공 여부 · 답 종류 · 오류 코드 · 모델 · 토큰 4가지 · 걸린 시간(글 · 이름은 남기지 않음). `supabase/migration_ai_usage.sql` — 10/1 적용함.
+
+## 🎮 미니게임(베타)
+검토자끼리(관리자 포함) 오목 · 가위바위보(3판 2선승) · 반응속도 · 데이터 요소 퀴즈를 겨룹니다. 규칙 · 문서 모양은 `lib/minigame.js`(화면과 같은 코드).
+
+- 컬렉션 `game` — 판마다 문서 1개(`g_<시각 36진수>_<무작위>`). 읽기 = 검토자 · 관리자(보기 전용은 빈 목록). 저장 이력(doc_history)에는 남기지 않음.
+- 쓰기 = `POST /api/docs {coll:'game', id, body:{act, …}}` — 서버가 검사해 문서를 만들고 **바꿀 칸만** 합침(a 쪽 `ra` · `sa`와 b 쪽 `rb` · `sb`가 따로라 동시에 내도 안 덮음). 응답 `{ok, at, body}`(합친 문서). 행동은 아래 표.
+- 가림: 가위바위보는 참가자가 읽을 때 상대가 나보다 더 낸 판을 `'?'`로 보냄(읽기 · 쓰기 응답 모두, 구경하는 사람은 그대로).
+- 별명: `profile` 문서에 `nick`(1~12자 · 한글 · 영문 · 숫자 · 공백 · `_` `.` `-` · 두 칸 띄움 안 됨 · `''`/`null` = 지움). 다른 사람 실명 · 별명과 겹치면 `409 nick_taken`(대소문자 · 공백 무시). 캐릭터만 바꿔도 별명이, 별명만 바꿔도 캐릭터가 남음.
+- DB: `supabase/migration_game.sql`(제약 · `nr_set_doc` · `nr_patch_doc` · `nr_list_docs`에 `game` 추가, 되돌리기는 파일 맨 아래) — 서버 배포 **전에** 한 번 실행.
+- 시험: `node tests/game_api.mjs`(메모리 모드 개발 서버를 띄워 로그인부터 끝까지 확인).
+
+| act | 누가 · 언제 | 바뀌는 칸 |
+|---|---|---|
+| `new {g, mode, stake, b}` | 누구나(b = 명단의 검토자 · 관리자, 자기 자신 안 됨 · 걸어 둔 판 5개까지) | 새 문서 `st:'ask'` |
+| `accept` · `decline` / `cancel` | b / a, 신청 중(수락은 24시간 안) | `st`(`play` · `no` · `cancel`), 수락 시각 `t1` |
+| `move {x, y}` | 오목 · 내 차례(흑 쌍삼 금지) | `mv` |
+| `pick {p}` | 가위바위보(`r` · `p` · `s`) · 상대가 따라올 때까지 한 판씩 | `ra` 또는 `rb` |
+| `score {v, t}` | 반응속도 · 퀴즈, 한 번만 | `sa` 또는 `sb` |
+| `resign` | 진행 중 참가자 | `rs` |
+| `apply {eids}` | 관리자 · 배팅 판이 승패로 끝난 뒤 한 번(요소 수 = stake) | `ap` |
 
 ## 화면 판
 화면 파일은 Supabase에 올리고 settings `asset_sha256:review.html`에 sha256을 적은 뒤 재배포합니다. 서버 코드가 그대로면 이 저장소는 바뀌지 않습니다.
