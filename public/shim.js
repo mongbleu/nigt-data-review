@@ -14,7 +14,7 @@
   const IDLE_POLL_MS = 60 * 1000;
   const REFRESH_AFTER_SET_MS = 800;
   const KEEPALIVE_MAX_BYTES = 60000; // 페이지를 닫는 중에도 저장 요청이 끝나도록 (브라우저 한도 64KB)
-  const COLLS = new Set(['reviews', 'answers', 'config', 'time', 'profile', 'chat']);   // time(9/30): 검토 시간 — 서버가 관리자에게만 전체, 검토자에게는 자기 문서만 줌 · profile(9/29 밤): 검토자 캐릭터 — 모두 읽음 · chat(9/30): 검토팀 채팅 — 검토자 · 관리자만(보기 전용은 빈 목록)
+  const COLLS = new Set(['reviews', 'answers', 'config', 'time', 'profile', 'chat', 'game']);   // time(9/30): 검토 시간 — 서버가 관리자에게만 전체, 검토자에게는 자기 문서만 줌 · profile(9/29 밤): 검토자 캐릭터 — 모두 읽음 · chat(9/30): 검토팀 채팅 — 검토자 · 관리자만(보기 전용은 빈 목록) · game(미니게임 베타): 검토자 · 관리자만(보기 전용은 빈 목록) — 저장은 {act, …}만 보내고 서버가 판 문서를 만들어 돌려줌(가위바위보는 상대가 아직 안 낸 판을 '?'로 가림)
   const REFRESH_MIN_MS = 2500;
   const ID_RE = /^[A-Za-z0-9_\-]{1,80}$/;
 
@@ -54,11 +54,16 @@
       let why = '';
       try { why = ((await res.json()) || {}).error || ''; } catch (e) { /* 본문 없음 */ }
       // 담당이 아닌 요소 저장 → 그 요소만 거절(앱이 알림) · 보기 전용·권한 없음 → 공용 저장 불가로 처리
-      throw fail(why === 'not_assigned' ? 'permission_denied' : 'invalid_argument', why || 'forbidden');
+      throw Object.assign(fail(why === 'not_assigned' ? 'permission_denied' : 'invalid_argument', why || 'forbidden'), { error: why });
     }
     if (res.status === 413) throw fail('quota_exceeded', 'payload too large');
     if (res.status >= 500) throw fail('unavailable', `server error ${res.status}`);
-    if (!res.ok) throw fail('failed_precondition', `request failed ${res.status}`);
+    if (!res.ok) {
+      // 11/12 미니게임: 서버 사유(error)를 e.error · 메시지에 함께 실음(code는 예전 그대로 — 앱의 기존 분기 유지)
+      let why = '';
+      try { why = ((await res.json()) || {}).error || ''; } catch (e) { /* 본문 없음 */ }
+      throw Object.assign(fail('failed_precondition', `request failed ${res.status}${why ? ' ' + why : ''}`), { error: why });
+    }
     try {
       return await res.json();
     } catch (e) {
