@@ -24,6 +24,7 @@ export const maxDuration = 60;   // 10/1 응답 뒤 자동 답변(AI 호출 30�
 
 // 10/1 응답을 보낸 뒤에 돌릴 일(Next after) — 요청 밖(단위 시험)이면 그냥 뒤에서 돌림. 실패는 로그만. 자동 답변 모듈은 필요할 때만 불러옴
 const autoreply = () => import('../../../lib/autoreply.js');
+const pushLib = () => import('../../../lib/push.js');   // 11/16 미니게임 대결 신청 알림(받는 사람 기기로) — 필요할 때만 불러옴
 function later(task) {
   const run = () => Promise.resolve().then(task).catch(e => console.error('[api/docs] 뒤처리 실패:', e && (e.code || e.message)));
   try { after(run); } catch { void run(); }
@@ -69,6 +70,9 @@ function cleanNick(v) {
   if (s.length > NICK_MAX || !NICK_RE.test(s) || s.includes('  ')) return { error: 'invalid_nick' };
   return { nick: s };
 }
+// 11/16 접속 표시: 화면이 보이는 동안 1분마다 {seen:true}만 보냄 → 서버 시각으로 profile.seen(ms)만 고침(45초 안에 다시 오면 쓰지 않음)
+const SEEN_MIN_MS = 45_000;
+const okSeen = v => Number.isFinite(v) && v > 0;
 // prev = 지금 문서 body · roster = 검토자 명단 · docs = profile 문서 전체 → {body} 또는 {error, status}
 function cleanProfile(body, name, prev, roster, docs, id) {
   const hasCC = CHAR_IDS.includes(body.char) && COLOR_IDS.includes(body.color);
@@ -91,6 +95,7 @@ function cleanProfile(body, name, prev, roster, docs, id) {
     }
   }
   if (nick) out.nick = nick;
+  if (okSeen(p.seen)) out.seen = p.seen;   // 11/16 접속 시각은 그대로 둠
   out.at = new Date().toISOString();
   out.by_name = name;
   return { body: out };
@@ -123,6 +128,15 @@ const GAME_ACTS = ['new', 'accept', 'decline', 'cancel', 'move', 'pick', 'score'
 const PLAY_ACTS = ['move', 'pick', 'score', 'resign'];
 const RPS_PICKS = ['r', 'p', 's'];
 const EID_RE = /^[A-E]-\d{3}$/;
+// 11/16 대결 신청 알림: 받는 사람(b)이 「대결 신청 알림」을 켠 기기에만. 보내는 사람은 별명(있으면)으로
+const GM_PUSH_NM = { omok: '오목', rps: '가위바위보', react: '반응속도', quiz: '데이터 요소 퀴즈' };
+async function pushChallenge(doc, id) {
+  let nm = doc.a;
+  try { const p = await getDoc('profile', profileIdOf(doc.a)); if (p && p.body && typeof p.body.nick === 'string' && p.body.nick) nm = p.body.nick; } catch { /* 별명 못 읽으면 이름 */ }
+  const what = (GM_PUSH_NM[doc.g] || '미니게임') + (doc.mode === 'bet' ? ` 배팅(데이터 요소 ${doc.stake}개)` : '');
+  const sent = await (await pushLib()).sendToName(doc.b, { title: '🎮 대결 신청이 왔어요', body: `${nm} 님이 「${what}」 대결을 신청했어요 — 눌러서 받기`, tag: 'gm-' + id, url: '/#gm' });
+  if (sent) console.log('[api/docs] 대결 신청 알림', sent);
+}
 const fail = (error, status) => json({ error }, status);
 // 가위바위보: 읽는 사람이 참가자면 상대가 나보다 더 낸 판을 '?'로 가린 사본(구경하는 사람 · 다른 게임은 그대로)
 function gameView(body, name) {
@@ -166,6 +180,7 @@ async function postGame(sess, id, input) {
     const doc = { kind: 'game', g, mode, stake, a: me, b, st: 'ask', ts: now, seed: randomInt(1, 2 ** 31), by_name: me };
     try {
       const r = await setDoc('game', id, doc, me);
+      later(() => pushChallenge(doc, id));   // 11/16 받는 사람 기기로 알림(응답 뒤 · 실패는 로그만)
       return json({ ok: true, at: r.at, body: gameView(doc, me) });
     } catch (e) { console.error('[POST /api/docs] game write failed:', e && e.message); return fail('store_unavailable', 502); }
   }
@@ -318,6 +333,18 @@ export async function POST(request) {
   else if (coll === 'profile') {
     if (!sess.name || id !== profileIdOf(sess.name)) return json({ error: 'forbidden' }, 403);
     if (paths) return json({ error: 'invalid_paths' }, 400);
+    // 11/16 접속 표시(heartbeat): {seen:true}만 — seen 칸 하나만 고친다(캐릭터 · 별명은 건드리지 않음). 응답은 늘 합친 문서
+    if (body.seen === true && Object.keys(body).length === 1) {
+      try {
+        const cur = await getDoc('profile', id);
+        const now = Date.now();
+        if (cur && cur.body && okSeen(cur.body.seen) && now - cur.body.seen < SEEN_MIN_MS) return json({ ok: true, at: cur.updated_at || null, body: cur.body, skip: true });
+        const r = cur && cur.body
+          ? await patchDoc('profile', id, { seen: now }, ['seen'], sess.name)
+          : await setDoc('profile', id, { kind: 'profile', name: sess.name, seen: now, by_name: sess.name }, sess.name);
+        return json({ ok: true, at: r.at, body: r.body || { kind: 'profile', name: sess.name, seen: now, by_name: sess.name } });
+      } catch (e) { console.error('[POST /api/docs] seen failed:', e && e.message); return json({ error: 'store_unavailable' }, 502); }
+    }
     let docs, roster = [];
     try { [docs, roster] = await Promise.all([listDocs('profile'), hasKey(body, 'nick') ? reviewers() : []]); }
     catch (e) { console.error('[POST /api/docs] profile read failed:', e && e.message); return json({ error: 'store_unavailable' }, 502); }
