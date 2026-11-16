@@ -1,6 +1,7 @@
 /* 서비스 워커(/sw.js · 10/1) — 관리자 휴대폰 알림(웹 푸시) 전용. 캐시 · 오프라인 저장 · 요청 가로채기(fetch) 없음 — 검토 기록은 늘 서버에.
  *   push: 서버(lib/push.js)가 보낸 {title, body, tag, url}을 알림으로 띄운다.
  *   notificationclick: 알림을 닫고, 열려 있는 검토 창구 창으로 가거나 없으면 새 창(url, 기본 /)을 연다.
+ *     11/16: 열린 창으로 갈 때 그 창에 {type:'nr-open', url}을 보냄 — 주소가 /#gm(미니게임 대결 신청)이면 화면이 미니게임을 연다.
  */
 'use strict';
 
@@ -26,7 +27,7 @@ self.addEventListener('notificationclick', event => {
   event.waitUntil((async () => {
     const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     for (const c of wins) {
-      if ('focus' in c) return c.focus();
+      if ('focus' in c) { try { c.postMessage({ type: 'nr-open', url }); } catch (e) { /* 옛 창 */ } return c.focus(); }
     }
     if (self.clients.openWindow) return self.clients.openWindow(url);
     return undefined;
